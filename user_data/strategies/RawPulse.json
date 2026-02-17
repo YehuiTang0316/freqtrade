@@ -1,0 +1,33 @@
+{
+  "strategy_name": "RawPulse",
+  "params": {
+    "roi": {
+      "0": 0.138,
+      "30": 0.097,
+      "72": 0.027,
+      "108": 0
+    },
+    "stoploss": {
+      "stoploss": -0.336
+    },
+    "trailing": {
+      "trailing_stop": true,
+      "trailing_stop_positive": 0.349,
+      "trailing_stop_positive_offset": 0.395,
+      "trailing_only_offset_is_reached": true
+    },
+    "max_open_trades": {
+      "max_open_trades": 3
+    },
+    "buy": {
+      "buy_ml_prob": 0.84,
+      "buy_vol_factor": 1.0
+    },
+    "sell": {
+      "sell_ml_prob": 0.73,
+      "sell_vol_factor": 1.3
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-02-17 15:57:46.250827+00:00"
+}
