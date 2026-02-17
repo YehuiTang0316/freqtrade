@@ -12,7 +12,7 @@ from functools import reduce
 import numpy as np
 from pandas import DataFrame
 
-from freqtrade.strategy import IStrategy, Trade
+from freqtrade.strategy import IStrategy, Trade, DecimalParameter, IntParameter
 
 import talib.abstract as ta
 from technical import qtpylib
@@ -38,21 +38,22 @@ class MLPulse(IStrategy):
 
     can_short = True
 
-    # --- ROI ---
+    # --- ROI (wider to let winners run) ---
     minimal_roi = {
-        "0": 0.02,
-        "60": 0.01,
-        "180": 0.005,
-        "360": 0,
+        "0": 0.04,
+        "60": 0.02,
+        "180": 0.01,
+        "360": 0.005,
+        "720": 0,
     }
 
-    # --- Stoploss ---
-    stoploss = -0.02
+    # --- Stoploss (wider for 5m volatility) ---
+    stoploss = -0.035
 
     # --- Trailing stop ---
     trailing_stop = True
-    trailing_stop_positive = 0.005
-    trailing_stop_positive_offset = 0.01
+    trailing_stop_positive = 0.01
+    trailing_stop_positive_offset = 0.02
     trailing_only_offset_is_reached = True
 
     # --- Timeframe ---
@@ -75,6 +76,12 @@ class MLPulse(IStrategy):
     }
 
     order_time_in_force = {"entry": "GTC", "exit": "GTC"}
+
+    # --- Hyperopt-optimizable entry parameters ---
+    buy_ml_prob = DecimalParameter(0.50, 0.70, default=0.55, decimals=2, space="buy", optimize=True)
+    buy_rsi_limit = IntParameter(60, 80, default=70, space="buy", optimize=True)
+    sell_ml_prob = DecimalParameter(0.50, 0.70, default=0.55, decimals=2, space="sell", optimize=True)
+    sell_rsi_limit = IntParameter(20, 40, default=30, space="sell", optimize=True)
 
     # -----------------------------------------------------------------------
     # FreqAI feature engineering
@@ -224,8 +231,8 @@ class MLPulse(IStrategy):
         enter_long_conditions = [
             df["do_predict"] == 1,
             df["&s-direction"] == "up",
-            df["up"] > 0.55,
-            df["rsi_14"] < 70,
+            df["up"] > self.buy_ml_prob.value,
+            df["rsi_14"] < self.buy_rsi_limit.value,
             vol_ok,
         ]
 
@@ -239,8 +246,8 @@ class MLPulse(IStrategy):
         enter_short_conditions = [
             df["do_predict"] == 1,
             df["&s-direction"] == "down",
-            df["down"] > 0.55,
-            df["rsi_14"] > 30,
+            df["down"] > self.sell_ml_prob.value,
+            df["rsi_14"] > self.sell_rsi_limit.value,
             vol_ok,
         ]
 
