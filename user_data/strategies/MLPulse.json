@@ -1,0 +1,30 @@
+{
+  "strategy_name": "MLPulse",
+  "params": {
+    "buy": {
+      "buy_ml_prob": 0.63,
+      "buy_rsi_limit": 60
+    },
+    "sell": {
+      "sell_ml_prob": 0.54,
+      "sell_rsi_limit": 23
+    },
+    "roi": {
+      "0": 0.173,
+      "33": 0.075,
+      "43": 0.037,
+      "160": 0
+    },
+    "stoploss": {
+      "stoploss": -0.10
+    },
+    "trailing": {
+      "trailing_stop": true,
+      "trailing_stop_positive": 0.05,
+      "trailing_stop_positive_offset": 0.10,
+      "trailing_only_offset_is_reached": false
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-02-17 05:20:00.000000+00:00"
+}

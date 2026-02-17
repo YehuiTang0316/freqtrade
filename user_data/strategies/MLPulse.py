@@ -47,7 +47,7 @@ class MLPulse(IStrategy):
         "720": 0,
     }
 
-    # --- Stoploss (wider for 5m volatility) ---
+    # --- Stoploss ---
     stoploss = -0.035
 
     # --- Trailing stop ---
@@ -196,11 +196,11 @@ class MLPulse(IStrategy):
         )
         pct_return = future_mean / dataframe["close"] - 1
 
-        # Classify: up > +0.3%, down < -0.3%, else neutral
+        # Classify: up > +0.5%, down < -0.5%, else neutral
         dataframe["&s-direction"] = np.where(
-            pct_return > 0.003,
+            pct_return > 0.005,
             "up",
-            np.where(pct_return < -0.003, "down", "neutral"),
+            np.where(pct_return < -0.005, "down", "neutral"),
         )
 
         return dataframe
@@ -209,6 +209,10 @@ class MLPulse(IStrategy):
     # Indicators (main timeframe, after FreqAI)
     # -----------------------------------------------------------------------
 
+    def informative_pairs(self):
+        # BTC 1h data for trend filter
+        return [("BTC/USDT:USDT", "1h")]
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Run FreqAI - this populates &s-direction, do_predict, up/down/neutral probs
         dataframe = self.freqai.start(dataframe, metadata, self)
@@ -216,6 +220,26 @@ class MLPulse(IStrategy):
         # TA confirmation indicators (computed on raw 5m data)
         dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
         dataframe["volume_sma_20"] = ta.SMA(dataframe["volume"], timeperiod=20)
+
+        # BTC 1h trend filter
+        btc_1h = self.dp.get_pair_dataframe("BTC/USDT:USDT", "1h")
+        if len(btc_1h) > 0:
+            btc_1h["btc_ema_50"] = ta.EMA(btc_1h, timeperiod=50)
+            btc_1h["btc_ema_200"] = ta.EMA(btc_1h, timeperiod=200)
+            btc_1h["btc_rsi_14"] = ta.RSI(btc_1h, timeperiod=14)
+            # Trend: 1=bullish, -1=bearish, 0=neutral
+            btc_1h["btc_trend"] = 0
+            btc_1h.loc[btc_1h["btc_ema_50"] > btc_1h["btc_ema_200"], "btc_trend"] = 1
+            btc_1h.loc[btc_1h["btc_ema_50"] < btc_1h["btc_ema_200"], "btc_trend"] = -1
+
+            # Merge BTC trend onto 5m dataframe
+            btc_1h = btc_1h[["date", "btc_trend", "btc_rsi_14"]].copy()
+            dataframe = dataframe.merge(btc_1h, on="date", how="left")
+            dataframe["btc_trend"] = dataframe["btc_trend"].ffill().fillna(0)
+            dataframe["btc_rsi_14"] = dataframe["btc_rsi_14"].ffill().fillna(50)
+        else:
+            dataframe["btc_trend"] = 0
+            dataframe["btc_rsi_14"] = 50
 
         return dataframe
 
@@ -227,12 +251,14 @@ class MLPulse(IStrategy):
         # Volume filter: above 50% of 20-period SMA
         vol_ok = (df["volume"] > df["volume_sma_20"] * 0.5) & (df["volume"] > 0)
 
-        # ===== LONG =====
+        # ===== LONG: require BTC neutral/bullish + RSI not weak =====
         enter_long_conditions = [
             df["do_predict"] == 1,
             df["&s-direction"] == "up",
             df["up"] > self.buy_ml_prob.value,
             df["rsi_14"] < self.buy_rsi_limit.value,
+            df["btc_trend"] >= 0,  # Don't long in BTC downtrend
+            df["btc_rsi_14"] > 40,  # Don't long when BTC RSI weak
             vol_ok,
         ]
 
@@ -242,12 +268,13 @@ class MLPulse(IStrategy):
                 ["enter_long", "enter_tag"],
             ] = (1, "ml_long")
 
-        # ===== SHORT =====
+        # ===== SHORT: require BTC not in uptrend =====
         enter_short_conditions = [
             df["do_predict"] == 1,
             df["&s-direction"] == "down",
             df["down"] > self.sell_ml_prob.value,
             df["rsi_14"] > self.sell_rsi_limit.value,
+            df["btc_trend"] <= 0,  # Don't short in BTC uptrend
             vol_ok,
         ]
 
@@ -310,21 +337,19 @@ class MLPulse(IStrategy):
         last_candle = dataframe.iloc[-1]
         trade_duration_h = (current_time - trade.open_date_utc).total_seconds() / 3600
 
-        # 1. Time stop: close after 6h if not profitable
-        if trade_duration_h > 6 and current_profit < 0.002:
-            return "exit_time_6h"
+        # 1. Time stop: close after 12h if not profitable
+        if trade_duration_h > 12 and current_profit < 0.002:
+            return "exit_time_12h"
 
         # 2. Profit-tiered RSI exit
         rsi = last_candle.get("rsi_14", 50)
 
         if not trade.is_short:
-            # Long: take profit if RSI overbought and in profit
             if current_profit > 0.015 and rsi > 75:
                 return "long_rsi_tp_high"
             if current_profit > 0.008 and rsi > 80:
                 return "long_rsi_tp_extreme"
         else:
-            # Short: take profit if RSI oversold and in profit
             if current_profit > 0.015 and rsi < 25:
                 return "short_rsi_tp_high"
             if current_profit > 0.008 and rsi < 20:
