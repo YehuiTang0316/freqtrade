@@ -43,22 +43,22 @@ class RawPulse(IStrategy):
 
     can_short = True
 
-    # --- ROI: tight for intraday scalping ---
+    # --- ROI: leveraged returns (at 20x, 0.5% price move = 10% return) ---
     minimal_roi = {
-        "0": 0.015,     # 1.5% (= 30% at 20x) - take profit aggressively
-        "30": 0.008,    # 0.8% after 30min
-        "60": 0.005,    # 0.5% after 1h
-        "120": 0.003,   # 0.3% after 2h
+        "0": 0.20,      # 20% return (= 1% price at 20x)
+        "30": 0.12,     # 12% after 30min
+        "60": 0.08,     # 8% after 1h
+        "120": 0.04,    # 4% after 2h
         "240": 0,       # breakeven after 4h
     }
 
-    # --- Stoploss: 0.3% = 6% capital at 20x ---
-    stoploss = -0.003
+    # --- Stoploss: -10% return (= 0.5% adverse price move at 20x) ---
+    stoploss = -0.10
 
     # --- Trailing stop ---
     trailing_stop = True
-    trailing_stop_positive = 0.0015   # 0.15% trail
-    trailing_stop_positive_offset = 0.0025  # activate after 0.25% profit
+    trailing_stop_positive = 0.05     # 5% trail (= 0.25% price)
+    trailing_stop_positive_offset = 0.10  # activate after 10% return (0.5% price)
     trailing_only_offset_is_reached = True
 
     # --- Timeframe ---
@@ -81,9 +81,9 @@ class RawPulse(IStrategy):
     order_time_in_force = {"entry": "GTC", "exit": "GTC"}
 
     # --- Hyperopt-optimizable parameters ---
-    buy_ml_prob = DecimalParameter(0.50, 0.75, default=0.55, decimals=2, space="buy", optimize=True)
+    buy_ml_prob = DecimalParameter(0.50, 0.85, default=0.65, decimals=2, space="buy", optimize=True)
     buy_vol_factor = DecimalParameter(0.3, 1.5, default=0.8, decimals=1, space="buy", optimize=True)
-    sell_ml_prob = DecimalParameter(0.50, 0.75, default=0.55, decimals=2, space="sell", optimize=True)
+    sell_ml_prob = DecimalParameter(0.50, 0.85, default=0.65, decimals=2, space="sell", optimize=True)
     sell_vol_factor = DecimalParameter(0.3, 1.5, default=0.8, decimals=1, space="sell", optimize=True)
 
     # -----------------------------------------------------------------------
@@ -209,15 +209,20 @@ class RawPulse(IStrategy):
 
         label_period = self.freqai_info["feature_parameters"]["label_period_candles"]
 
-        # Future close vs current close
-        future_close = dataframe["close"].shift(-label_period)
-        pct_return = future_close / dataframe["close"] - 1
+        # Rolling mean of future closes vs current close (smoother than single point)
+        future_mean = (
+            dataframe["close"]
+            .shift(-label_period)
+            .rolling(label_period)
+            .mean()
+        )
+        pct_return = future_mean / dataframe["close"] - 1
 
-        # Classify: up > +0.3%, down < -0.3%, else neutral
+        # Classify: up > +0.5%, down < -0.5%, else neutral
         dataframe["&s-direction"] = np.where(
-            pct_return > 0.003,
+            pct_return > 0.005,
             "up",
-            np.where(pct_return < -0.003, "down", "neutral"),
+            np.where(pct_return < -0.005, "down", "neutral"),
         )
 
         return dataframe
@@ -348,26 +353,26 @@ class RawPulse(IStrategy):
         last_candle = dataframe.iloc[-1]
         trade_duration_h = (current_time - trade.open_date_utc).total_seconds() / 3600
 
+        # current_profit is leveraged return: at 20x, 1% price = 20% return
+
         # 1. FORCED INTRADAY CLOSE: 4h max holding period
         if trade_duration_h > 4:
             return "exit_forced_4h"
 
-        # 2. Quick take-profit: lock in gains at 0.4%+ (= 8% at 20x)
-        if current_profit > 0.004:
-            # If profit is retreating, exit quickly
-            if trade_duration_h > 1:
-                return "exit_tp_retreat"
-
-        # 3. Profit-tiered exit: aggressive at 20x
-        if current_profit > 0.008:  # 0.8% = 16% at 20x
+        # 2. Big win take-profit: 25%+ return (1.25% price move at 20x)
+        if current_profit > 0.25:
             return "exit_tp_high"
 
-        # 4. Time decay: close losing trades early
-        if trade_duration_h > 2 and current_profit < 0.001:
+        # 3. Quick take-profit: 12%+ return after 30min
+        if current_profit > 0.12 and trade_duration_h > 0.5:
+            return "exit_tp_retreat"
+
+        # 4. Time decay: close stagnant trades after 2h
+        if trade_duration_h > 2 and current_profit < 0.03:
             return "exit_time_decay_2h"
 
         # 5. Model uncertainty exit
-        if last_candle.get("do_predict", 1) == 0 and current_profit > -0.001:
+        if last_candle.get("do_predict", 1) == 0 and current_profit > -0.05:
             return "exit_model_uncertain"
 
         return None
@@ -391,12 +396,12 @@ class RawPulse(IStrategy):
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         last_candle = df.iloc[-1].squeeze()
 
-        # 0.15% slippage protection (tighter than MLPulse due to 20x leverage)
+        # 0.1% slippage protection (tight for 20x: 0.1% slip = 2% leveraged loss)
         if side == "long":
-            if rate > (last_candle["close"] * (1 + 0.0015)):
+            if rate > (last_candle["close"] * (1 + 0.001)):
                 return False
         else:
-            if rate < (last_candle["close"] * (1 - 0.0015)):
+            if rate < (last_candle["close"] * (1 - 0.001)):
                 return False
 
         return True

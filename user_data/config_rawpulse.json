@@ -59,7 +59,7 @@
                 "BTC/USDT:USDT",
                 "ETH/USDT:USDT"
             ],
-            "label_period_candles": 6,
+            "label_period_candles": 12,
             "include_shifted_candles": 2,
             "DI_threshold": 0.9,
             "weight_factor": 0.9,
