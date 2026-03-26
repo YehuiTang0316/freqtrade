@@ -164,7 +164,8 @@ class BreakPulse(IStrategy):
             (dataframe["bb_lower"] > kc_lower)
             & (dataframe["bb_upper"] < kc_upper)
         )
-        prev_squeeze = squeeze_on.shift(1).fillna(False)
+        prev_squeeze = squeeze_on.shift(1)
+        prev_squeeze = prev_squeeze.infer_objects(copy=False).fillna(False)
 
         # ===== LONG: Upward breakout from squeeze =====
         long_squeeze_break = (
