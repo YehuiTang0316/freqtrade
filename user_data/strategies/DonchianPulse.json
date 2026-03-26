@@ -1,0 +1,34 @@
+{
+  "strategy_name": "DonchianPulse",
+  "params": {
+    "max_open_trades": {
+      "max_open_trades": 6
+    },
+    "buy": {
+      "buy_adx_min": 20,
+      "buy_volume_mult": 1.2,
+      "donchian_period": 20
+    },
+    "sell": {
+      "sell_adx_min": 20,
+      "sell_volume_mult": 1.0
+    },
+    "roi": {
+      "0": 0.395,
+      "331": 0.202,
+      "898": 0.073,
+      "2295": 0
+    },
+    "stoploss": {
+      "stoploss": -0.074
+    },
+    "trailing": {
+      "trailing_stop": true,
+      "trailing_stop_positive": 0.022,
+      "trailing_stop_positive_offset": 0.075,
+      "trailing_only_offset_is_reached": true
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-03-26 04:13:11.737844+00:00"
+}
