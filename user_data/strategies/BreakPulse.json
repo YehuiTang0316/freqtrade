@@ -1,0 +1,35 @@
+{
+  "strategy_name": "BreakPulse",
+  "params": {
+    "roi": {
+      "0": 0.187,
+      "352": 0.14,
+      "874": 0.048,
+      "2222": 0
+    },
+    "stoploss": {
+      "stoploss": -0.087
+    },
+    "trailing": {
+      "trailing_stop": true,
+      "trailing_stop_positive": 0.021,
+      "trailing_stop_positive_offset": 0.07,
+      "trailing_only_offset_is_reached": true
+    },
+    "max_open_trades": {
+      "max_open_trades": 6
+    },
+    "buy": {
+      "buy_adx_min": 17,
+      "buy_squeeze_lookback": 18,
+      "buy_volume_mult": 1.7,
+      "keltner_atr_mult": 2.1
+    },
+    "sell": {
+      "sell_adx_min": 15,
+      "sell_volume_mult": 1.0
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-03-26 03:55:06.711230+00:00"
+}

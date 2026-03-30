@@ -1,0 +1,36 @@
+{
+  "strategy_name": "OBVPulse",
+  "params": {
+    "roi": {
+      "0": 0.369,
+      "289": 0.092,
+      "708": 0.061,
+      "1622": 0
+    },
+    "stoploss": {
+      "stoploss": -0.146
+    },
+    "trailing": {
+      "trailing_stop": true,
+      "trailing_stop_positive": 0.025,
+      "trailing_stop_positive_offset": 0.07,
+      "trailing_only_offset_is_reached": true
+    },
+    "max_open_trades": {
+      "max_open_trades": 6
+    },
+    "buy": {
+      "buy_adx_min": 17,
+      "buy_volume_mult": 1.0,
+      "keltner_atr_mult": 2.9,
+      "obv_fast": 7,
+      "obv_slow": 16
+    },
+    "sell": {
+      "sell_adx_min": 16,
+      "sell_volume_mult": 0.6
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-03-26 11:15:40.406261+00:00"
+}
