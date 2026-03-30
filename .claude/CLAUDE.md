@@ -140,10 +140,8 @@ d4e5f6g	ATRBreak	v1	0.00	0.00	0.00	0.00	0	2	crash	ATR breakout (config error)
 
 ## 策略上线流水线
 
-通过回测的策略（keep 状态）按以下流程推进：
-
 ```
-[keep] → [hyperopt 优化] → [再次回测确认] → [Dry Run 7天] → [Live 小仓位] → [Live 扩仓]
+[回测通过] → [checkout 到 dryrun 分支] → [Dry Run 7天] → [checkout 到 prod 分支] → [Live]
 ```
 
 ### Dry Run 上线标准（全部满足）
@@ -163,10 +161,9 @@ d4e5f6g	ATRBreak	v1	0.00	0.00	0.00	0.00	0	2	crash	ATR breakout (config error)
 
 ### 上线操作
 
+Dry-run 用 `scripts/multi_dryrun.py` 管理多实例：
 ```bash
-# 修改 docker-compose.yml 中的策略名和配置
-# 然后：
-docker compose down && docker compose up -d
+python3 scripts/multi_dryrun.py add --name xx --strategy XX --config user_data/config_nfix.json --port 180XX --start
 ```
 
 上线后在 `results.tsv` 中更新 status 为 `dry-run` 或 `live`。
@@ -202,11 +199,45 @@ BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, DOT, LINK 等
 ### 分支模型
 
 ```
-develop          ← upstream freqtrade（只同步上游，不开发）
-  └── dev        ← 策略主干（通过回测的策略合并到此）
-        ├── strategy/TrendPulse
-        ├── strategy/MLPulse
-        └── strategy/<NewStrategy>
+develop              ← upstream freqtrade（只同步上游，不开发）
+  └── dev            ← 通用基础（脚本、配置、.claude/）。不存策略文件
+        ├── strategy/XX  ← 从 dev 分叉，单个策略开发+回测
+        ├── dryrun       ← 从 dev 分叉，只放正在 dry-run 验证的策略
+        └── prod         ← 从 dev 分叉，只放实盘运行的策略
+```
+
+- **dev**：只有通用工具（scripts/、ops/、.claude/、configs），**不存策略文件**
+- **strategy/XX**：从 dev 分叉，包含单个策略的 .py 和 .json 文件
+- **dryrun**：从 dev 分叉，包含所有正在 dry-run 的策略文件
+- **prod**：从 dev 分叉，包含所有实盘运行的策略文件
+
+### 策略上线流程
+
+```
+strategy/XX → (回测通过) → dryrun → (7天验证通过) → prod
+```
+
+**strategy/XX → dryrun**（回测通过，开始 dry-run）：
+```bash
+git checkout dryrun
+git checkout strategy/XX -- user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(dryrun): add XX for dry-run validation"
+git push origin dryrun
+```
+
+**dryrun → prod**（dry-run 验证通过，上实盘）：
+```bash
+git checkout prod
+git checkout dryrun -- user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(prod): promote XX after dry-run validation"
+git push origin prod
+```
+
+**移除策略**：
+```bash
+git checkout dryrun  # 或 prod
+git rm user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(dryrun): remove XX - <原因>"
 ```
 
 ### Commit 规范
@@ -216,14 +247,15 @@ feat(strategy): add <StrategyName> - <核心思路简述>
 optimize(strategy): <StrategyName> v<N> hyperopt - Sharpe X.XX, +Y.YY%, DD Z.ZZ%
 experiment(strategy): <StrategyName> - <本次实验假设>
 fix(strategy): <StrategyName> - <修复内容>
-disable(strategy): stop <StrategyName> due to <原因>
+chore(dryrun): add/remove <StrategyName> - dry-run 管理
+chore(prod): promote/remove <StrategyName> - 实盘管理
 ```
 
 ### 合并规则
 
-- 只有 `status=keep` 且 Sharpe > 2.0 的策略才能合并到 `dev`
-- 合并前确认 `dev` 分支上没有运行中的 bot 依赖的策略被破坏
-- 合并后打 tag：`v<N>-<StrategyName>`
+- `strategy/XX` 分支**不合并到 dev**，只通过 checkout 文件的方式提升到 dryrun/prod
+- 回测通过 → 推送 strategy/XX 分支到 origin 备份，打 tag `v<N>-<StrategyName>`
+- dev 只接受通用工具脚本的提交
 
 ## 关键经验（历史教训）
 
