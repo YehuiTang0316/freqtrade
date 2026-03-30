@@ -27,12 +27,12 @@
 
 ### 远程服务器（Dry Run + Prod）
 
-- **服务器**：`ubuntu@13.212.151.85`（AWS 新加坡）
-- **SSH**：`ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.212.151.85`
-- **部署目录**：
-  - `/opt/freqtrade/dryrun/` → checkout `dryrun` 分支
-  - `/opt/freqtrade/prod/` → checkout `prod` 分支
-- **部署方式**：本地 push 到 origin → 远程 git pull → 重启容器
+- **服务器**：`ubuntu@13.250.9.24`（AWS 新加坡）
+- **SSH**：`ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.250.9.24`
+- **实例规格**：t3.medium（4GB 内存）
+- **部署目录**：`/opt/freqtrade/` → git clone，checkout `dryrun` 分支
+- **部署方式**：本地 push 到 origin → 远程 `cd /opt/freqtrade && git pull && python3 scripts/multi_dryrun.py up`
+- **FreqUI 访问**：`http://13.250.9.24:18081~18085`（用户名/密码：freqtrader/freqtrader）
 - 远程服务器直连 Binance（无需代理），使用 `config_remote.json`
 
 ## 实验循环
@@ -154,6 +154,7 @@ commit	strategy	version	sharpe	profit_pct	dd_pct	wr_pct	trades	leverage	status	d
 - 交易次数 > 50
 - Win Rate > 45%
 - hyperopt 后的参数已固化到策略文件或 JSON
+- **同时运行的 dry-run 实例不超过 6 个**（远程服务器资源限制）
 
 ### Dry Run → Live 上线标准（全部满足）
 
@@ -173,7 +174,7 @@ git commit -m "chore(dryrun): add XX for dry-run validation"
 git push origin dryrun
 
 # 2. 远程：拉取并启动
-ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.212.151.85 \
+ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.250.9.24 \
   "cd /opt/freqtrade/dryrun && git pull && python3 scripts/multi_dryrun.py up"
 ```
 
@@ -186,7 +187,7 @@ git commit -m "chore(prod): promote XX after dry-run validation"
 git push origin prod
 
 # 2. 远程：拉取并启动
-ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.212.151.85 \
+ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.250.9.24 \
   "cd /opt/freqtrade/prod && git pull && python3 scripts/multi_dryrun.py up"
 ```
 
