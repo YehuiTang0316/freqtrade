@@ -17,11 +17,23 @@
 
 ## 执行环境
 
+### 本地（开发 + 回测）
+
 - **Freqtrade 运行在 Docker 中**，所有 freqtrade 命令通过 `docker exec freqtrade freqtrade ...` 执行
 - **本地没有安装 freqtrade CLI**
 - 策略文件在 `user_data/strategies/`（已 gitignore，提交时用 `git add -f`）
 - 配置文件在 `user_data/`：`config.json`（现货）、`config_nfix.json`（合约+代理）、`config_mlpulse.json`（FreqAI）
 - 数据：Binance 合约，10 个主流币对，5m/15m/1h/4h 时间周期
+
+### 远程服务器（Dry Run + Prod）
+
+- **服务器**：`ubuntu@13.212.151.85`（AWS 新加坡）
+- **SSH**：`ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.212.151.85`
+- **部署目录**：
+  - `/opt/freqtrade/dryrun/` → checkout `dryrun` 分支
+  - `/opt/freqtrade/prod/` → checkout `prod` 分支
+- **部署方式**：本地 push 到 origin → 远程 git pull → 重启容器
+- 远程服务器直连 Binance（无需代理），使用 `config_remote.json`
 
 ## 实验循环
 
@@ -127,23 +139,12 @@ commit	strategy	version	sharpe	profit_pct	dd_pct	wr_pct	trades	leverage	status	d
 - `status`：`keep`、`discard`、`crash`、`hyperopt`、`dry-run`、`live`
 - `description`：简短描述本次实验内容
 
-示例：
-```
-commit	strategy	version	sharpe	profit_pct	dd_pct	wr_pct	trades	leverage	status	description
-a1b2c3d	TrendPulse	v5	2.31	6.28	3.53	63.8	156	2	keep	1h trend following + hyperopt params
-b2c3d4e	MLPulse	v3	4.34	1.48	1.83	63.7	113	2	keep	FreqAI LightGBM + BTC trend filter
-c3d4e5f	RawPulse	v3	0.51	1.83	9.95	67.6	241	20	discard	FreqAI raw features 20x (marginal)
-d4e5f6g	ATRBreak	v1	0.00	0.00	0.00	0.00	0	2	crash	ATR breakout (config error)
-```
-
 **注意**：`results.tsv` 不要 git commit，保持 untracked。
 
 ## 策略上线流水线
 
-通过回测的策略（keep 状态）按以下流程推进：
-
 ```
-[keep] → [hyperopt 优化] → [再次回测确认] → [Dry Run 7天] → [Live 小仓位] → [Live 扩仓]
+[回测通过] → [checkout 到 dryrun 分支] → [部署到远程] → [Dry Run 7天] → [checkout 到 prod 分支] → [部署到远程] → [Live]
 ```
 
 ### Dry Run 上线标准（全部满足）
@@ -156,17 +157,37 @@ d4e5f6g	ATRBreak	v1	0.00	0.00	0.00	0.00	0	2	crash	ATR breakout (config error)
 
 ### Dry Run → Live 上线标准（全部满足）
 
-- Dry Run 运行 ≥ 7 天
+- Dry Run 运行 >= 7 天
 - 模拟盈利为正
 - 实际表现与回测偏差 < 30%
 - 无单笔亏损超过总资金 5% 的交易
 
-### 上线操作
+### 部署操作
 
+**添加策略到 dryrun**：
 ```bash
-# 修改 docker-compose.yml 中的策略名和配置
-# 然后：
-docker compose down && docker compose up -d
+# 1. 本地：checkout 策略文件到 dryrun 分支
+git checkout dryrun
+git checkout strategy/XX -- user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(dryrun): add XX for dry-run validation"
+git push origin dryrun
+
+# 2. 远程：拉取并启动
+ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.212.151.85 \
+  "cd /opt/freqtrade/dryrun && git pull && python3 scripts/multi_dryrun.py up"
+```
+
+**提升策略到 prod**：
+```bash
+# 1. 本地：checkout 策略文件到 prod 分支
+git checkout prod
+git checkout dryrun -- user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(prod): promote XX after dry-run validation"
+git push origin prod
+
+# 2. 远程：拉取并启动
+ssh -i ~/.ssh/yehui-ap-east.pem ubuntu@13.212.151.85 \
+  "cd /opt/freqtrade/prod && git pull && python3 scripts/multi_dryrun.py up"
 ```
 
 上线后在 `results.tsv` 中更新 status 为 `dry-run` 或 `live`。
@@ -178,8 +199,8 @@ docker compose down && docker compose up -d
 - 修改 `user_data/strategies/` 下的策略文件（创建新的或修改已有的）
 - 创建/修改 `user_data/` 下的配置文件
 - 运行回测、hyperopt、下载数据
-- 自主使用 Git 管理版本（创建分支、提交、合并、回退）
-- 修改 `docker-compose.yml` 来切换运行的策略（需确认后 restart）
+- 自主使用 Git 管理版本（创建分支、提交、推送）
+- 通过 SSH 部署到远程服务器（pull + restart）
 - 修改 `todo.md` 和 `results.tsv`
 
 ### 你 CANNOT 做的：
@@ -202,11 +223,45 @@ BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, DOT, LINK 等
 ### 分支模型
 
 ```
-develop          ← upstream freqtrade（只同步上游，不开发）
-  └── dev        ← 策略主干（通过回测的策略合并到此）
-        ├── strategy/TrendPulse
-        ├── strategy/MLPulse
-        └── strategy/<NewStrategy>
+develop              <- upstream freqtrade（只同步上游，不开发）
+  └── dev            <- 通用基础（脚本、配置、.claude/）。不存策略文件
+        ├── strategy/XX  <- 从 dev 分叉，单个策略开发+回测
+        ├── dryrun       <- 从 dev 分叉，只放正在 dry-run 验证的策略
+        └── prod         <- 从 dev 分叉，只放实盘运行的策略
+```
+
+- **dev**：只有通用工具（scripts/、ops/、.claude/、configs），**不存策略文件**
+- **strategy/XX**：从 dev 分叉，包含单个策略的 .py 和 .json 文件
+- **dryrun**：从 dev 分叉，包含所有正在 dry-run 的策略文件。远程部署到 `/opt/freqtrade/dryrun/`
+- **prod**：从 dev 分叉，包含所有实盘运行的策略文件。远程部署到 `/opt/freqtrade/prod/`
+
+### 策略上线流程
+
+```
+strategy/XX -> (回测通过) -> dryrun -> (7天验证通过) -> prod
+```
+
+**strategy/XX -> dryrun**（回测通过，开始 dry-run）：
+```bash
+git checkout dryrun
+git checkout strategy/XX -- user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(dryrun): add XX for dry-run validation"
+git push origin dryrun
+```
+
+**dryrun -> prod**（dry-run 验证通过，上实盘）：
+```bash
+git checkout prod
+git checkout dryrun -- user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(prod): promote XX after dry-run validation"
+git push origin prod
+```
+
+**移除策略**：
+```bash
+git checkout dryrun  # 或 prod
+git rm user_data/strategies/XX.py user_data/strategies/XX.json
+git commit -m "chore(dryrun): remove XX - <原因>"
 ```
 
 ### Commit 规范
@@ -216,21 +271,22 @@ feat(strategy): add <StrategyName> - <核心思路简述>
 optimize(strategy): <StrategyName> v<N> hyperopt - Sharpe X.XX, +Y.YY%, DD Z.ZZ%
 experiment(strategy): <StrategyName> - <本次实验假设>
 fix(strategy): <StrategyName> - <修复内容>
-disable(strategy): stop <StrategyName> due to <原因>
+chore(dryrun): add/remove <StrategyName> - dry-run 管理
+chore(prod): promote/remove <StrategyName> - 实盘管理
 ```
 
 ### 合并规则
 
-- 只有 `status=keep` 且 Sharpe > 2.0 的策略才能合并到 `dev`
-- 合并前确认 `dev` 分支上没有运行中的 bot 依赖的策略被破坏
-- 合并后打 tag：`v<N>-<StrategyName>`
+- `strategy/XX` 分支**不合并到 dev**，只通过 checkout 文件的方式提升到 dryrun/prod
+- 回测通过 -> 推送 strategy/XX 分支到 origin 备份，打 tag `v<N>-<StrategyName>`
+- dev 只接受通用工具脚本的提交
 
 ## 关键经验（历史教训）
 
 这些是之前实验积累的重要规律，在设计新策略时**必须**参考：
 
 - **高杠杆陷阱**：20x 杠杆下 stoploss 是 leveraged return（-0.01 = 0.05% 价格变动即触发）。需要 stoploss=-0.15~-0.34 才合理
-- **手续费侵蚀**：20x 杠杆的 round-trip fee = 0.05% × 20 × 2 = 2%，极大侵蚀利润
+- **手续费侵蚀**：20x 杠杆的 round-trip fee = 0.05% x 20 x 2 = 2%，极大侵蚀利润
 - **时间周期**：1h 比 5m/15m 噪声少很多，策略更稳定
 - **Hyperopt 分步做**：先 `roi stoploss trailing`，再 `buy sell`，效果优于一次全做
 - **BTC 趋势过滤**：在 ML 策略中加入 BTC 1h EMA50/200 + RSI>40 趋势过滤对熊市表现至关重要
@@ -253,7 +309,7 @@ disable(strategy): stop <StrategyName> due to <原因>
 - [ ] 当前正在做的实验（开始日期：YYYY-MM-DD）
 
 ## 已完成
-- [x] 完成的实验 → 关键结果数据
+- [x] 完成的实验 -> 关键结果数据
 
 ## 策略版本对比
 （从 results.tsv 生成的汇总表）
