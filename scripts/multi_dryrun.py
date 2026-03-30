@@ -213,6 +213,7 @@ def render_compose(registry: dict[str, Any], compose_path: Path = COMPOSE_PATH) 
     project_name = registry.get("project_name", "freqtrade-dryrun")
     image = registry.get("image", "freqtradeorg/freqtrade:stable")
     internal_port = int(registry.get("internal_api_port", 8080))
+    bind_address = registry.get("bind_address", "127.0.0.1")
     user_data_source = USER_DATA_DIR.resolve().as_posix()
 
     lines = [f"name: {yaml_scalar(project_name)}", "services:"]
@@ -230,7 +231,7 @@ def render_compose(registry: dict[str, Any], compose_path: Path = COMPOSE_PATH) 
                 f"        source: {yaml_scalar(user_data_source)}",
                 f"        target: {yaml_scalar('/freqtrade/user_data')}",
                 "    ports:",
-                f"      - {yaml_scalar(f'127.0.0.1:{host_port}:{internal_port}')}",
+                f"      - {yaml_scalar(f'{bind_address}:{host_port}:{internal_port}')}",
                 "    command:",
             ]
         )

@@ -3,6 +3,7 @@
   "image": "freqtradeorg/freqtrade:stable",
   "default_config": "user_data/config_remote.json",
   "internal_api_port": 8080,
+  "bind_address": "0.0.0.0",
   "host_port_start": 18081,
   "username": "freqtrader",
   "password": "freqtrader",
