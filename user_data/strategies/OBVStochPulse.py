@@ -13,19 +13,15 @@ import talib.abstract as ta
 from technical import qtpylib
 
 
-class OBVPulseRisk(IStrategy):
+class OBVStochPulse(IStrategy):
     """
-    OBVPulseRisk v5: OBVPulse + ATR position sizing + drawdown protection.
+    OBVStochPulse v1: Dual momentum confirmation (OBV + StochRSI) + squeeze.
 
-    Core signal: OBV EMA crossover + CCI + HA + BB squeeze (same as OBVPulse v1).
-    Position sizing (bid.md risk model):
-      - Risk per trade = 1% of wallet (halved during drawdown)
-      - ATR determines effective stop distance → inversely sizes position
-      - High volatility = smaller position, low volatility = larger position
-    Drawdown protection:
-      - Tracks high water mark of wallet
-      - If wallet < 90% of HWM: halve risk to 0.5%
-      - Prevents drawdown spiral
+    Hypothesis: OBV captures volume momentum, StochRSI captures price momentum.
+    When both agree on direction during a squeeze breakout, the signal is stronger.
+    This combines the best elements of OBVPulse (Sharpe 13.20) and StochMomPulse (DD 2.25%).
+
+    Position sizing: ATR risk-based with drawdown protection (proven from OBVPulseRisk).
     """
 
     INTERFACE_VERSION = 3
@@ -34,6 +30,7 @@ class OBVPulseRisk(IStrategy):
     timeframe = "1h"
     startup_candle_count: int = 200
 
+    # OBVPulse v1 params (proven best, no hyperopt)
     minimal_roi = {"0": 0.609, "305": 0.193, "569": 0.079, "1729": 0}
     stoploss = -0.094
     trailing_stop = True
@@ -47,22 +44,25 @@ class OBVPulseRisk(IStrategy):
     order_types = {"entry": "limit", "exit": "limit", "stoploss": "market", "stoploss_on_exchange": False}
     order_time_in_force = {"entry": "GTC", "exit": "GTC"}
 
-    # Signal parameters (same as OBVPulse v1)
-    obv_fast = IntParameter(5, 15, default=8, space="buy", optimize=True)
-    obv_slow = IntParameter(15, 30, default=21, space="buy", optimize=True)
-    keltner_atr_mult = DecimalParameter(1.5, 3.0, default=2.1, decimals=1, space="buy", optimize=True)
-    buy_adx_min = IntParameter(15, 30, default=20, space="buy", optimize=True)
+    # OBV params (hyperopt optimized)
+    obv_fast = IntParameter(5, 15, default=7, space="buy", optimize=True)
+    obv_slow = IntParameter(15, 30, default=17, space="buy", optimize=True)
+    # StochRSI params
+    buy_stoch_k = IntParameter(10, 30, default=22, space="buy", optimize=True)
+    sell_stoch_k = IntParameter(70, 90, default=80, space="sell", optimize=True)
+    # Shared params (hyperopt optimized)
+    keltner_atr_mult = DecimalParameter(1.5, 3.0, default=3.0, decimals=1, space="buy", optimize=True)
+    buy_adx_min = IntParameter(15, 30, default=15, space="buy", optimize=True)
     sell_adx_min = IntParameter(10, 25, default=15, space="sell", optimize=True)
-    buy_volume_mult = DecimalParameter(1.0, 3.0, default=1.5, decimals=1, space="buy", optimize=True)
+    buy_volume_mult = DecimalParameter(1.0, 3.0, default=2.0, decimals=1, space="buy", optimize=True)
     sell_volume_mult = DecimalParameter(0.5, 2.0, default=1.0, decimals=1, space="sell", optimize=True)
 
-    # Risk management parameters
-    risk_normal = 0.012     # 1.2% risk per trade in normal mode
-    risk_drawdown = 0.006   # 0.6% risk per trade in drawdown mode
-    dd_threshold = 0.10     # 10% drawdown triggers protective mode
-    atr_stop_mult = 2.0     # 2x ATR as stop distance
-    max_stake_pct = 0.15    # max 15% of wallet per trade
-    # High water mark tracking
+    # Risk management
+    risk_normal = 0.012
+    risk_drawdown = 0.006
+    dd_threshold = 0.10
+    atr_stop_mult = 2.0
+    max_stake_pct = 0.15
     _hwm = 0.0
 
     @informative("1h", "BTC/USDT:USDT")
@@ -83,15 +83,20 @@ class OBVPulseRisk(IStrategy):
         return dataframe
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # OBV and its EMAs
+        # OBV and EMAs
         dataframe["obv"] = ta.OBV(dataframe)
         for p in range(5, 31):
             dataframe[f"obv_ema_{p}"] = ta.EMA(dataframe["obv"], timeperiod=p)
 
-        # CCI
+        # StochRSI
+        stoch_rsi = ta.STOCHRSI(dataframe, timeperiod=14, fastk_period=3, fastd_period=3)
+        dataframe["stoch_k"] = stoch_rsi["fastk"]
+        dataframe["stoch_d"] = stoch_rsi["fastd"]
+
+        # CCI (from OBVPulse)
         dataframe["cci"] = ta.CCI(dataframe, timeperiod=20)
 
-        # HA
+        # HA (from OBVPulse)
         ha = qtpylib.heikinashi(dataframe)
         dataframe["ha_bull"] = (ha["close"] > ha["open"]).astype(int)
         dataframe["ha_bear"] = (ha["close"] < ha["open"]).astype(int)
@@ -131,16 +136,20 @@ class OBVPulseRisk(IStrategy):
 
         obv_fast_col = f"obv_ema_{self.obv_fast.value}"
         obv_slow_col = f"obv_ema_{self.obv_slow.value}"
-
         obv_bull = dataframe[obv_fast_col] > dataframe[obv_slow_col]
         obv_bear = dataframe[obv_fast_col] < dataframe[obv_slow_col]
 
-        # Long
+        # StochRSI momentum: bullish when K > threshold and K > D
+        stoch_bull = (dataframe["stoch_k"] > self.buy_stoch_k.value) & (dataframe["stoch_k"] > dataframe["stoch_d"])
+        stoch_bear = (dataframe["stoch_k"] < self.sell_stoch_k.value) & (dataframe["stoch_k"] < dataframe["stoch_d"])
+
+        # Long: OBV bull + StochRSI bull + squeeze + HA + CCI
         long_1 = (
             btc_ok_long
             & (dataframe["trend_4h"] >= 0)
             & (prev_squeeze | dataframe["bb_tight"])
             & obv_bull
+            & stoch_bull
             & (dataframe["cci"] > 100)
             & dataframe["ha_bull_2"]
             & (dataframe["close"] > dataframe["bb_upper"])
@@ -149,10 +158,12 @@ class OBVPulseRisk(IStrategy):
             & (dataframe["volume"] > 0)
         )
 
+        # Long 2: Strong dual momentum (relaxed squeeze)
         long_2 = (
             btc_ok_long
             & (dataframe["trend_4h"] == 1)
             & obv_bull
+            & stoch_bull
             & (dataframe["cci"] > 150)
             & dataframe["ha_bull_2"]
             & (dataframe["ema_9"] > dataframe["ema_21"])
@@ -161,10 +172,10 @@ class OBVPulseRisk(IStrategy):
             & (dataframe["volume"] > 0)
         )
 
-        dataframe.loc[long_1, ["enter_long", "enter_tag"]] = (1, "long_obv_squeeze")
-        dataframe.loc[long_2 & ~long_1, ["enter_long", "enter_tag"]] = (1, "long_obv_momentum")
+        dataframe.loc[long_1, ["enter_long", "enter_tag"]] = (1, "long_dual_squeeze")
+        dataframe.loc[long_2 & ~long_1, ["enter_long", "enter_tag"]] = (1, "long_dual_momentum")
 
-        # Short
+        # Short: OBV-only (no StochRSI requirement — preserve original signal strength)
         short_1 = (
             btc_ok_short
             & (dataframe["trend_4h"] <= 0)
@@ -190,8 +201,8 @@ class OBVPulseRisk(IStrategy):
             & (dataframe["volume"] > 0)
         )
 
-        dataframe.loc[short_1, ["enter_short", "enter_tag"]] = (1, "short_obv_squeeze")
-        dataframe.loc[short_2 & ~short_1, ["enter_short", "enter_tag"]] = (1, "short_obv_momentum")
+        dataframe.loc[short_1, ["enter_short", "enter_tag"]] = (1, "short_dual_squeeze")
+        dataframe.loc[short_2 & ~short_1, ["enter_short", "enter_tag"]] = (1, "short_dual_momentum")
 
         return dataframe
 
@@ -207,19 +218,17 @@ class OBVPulseRisk(IStrategy):
         last = dataframe.iloc[-1]
         hours = (current_time - trade.open_date_utc).total_seconds() / 3600
 
-        # Time-based exits: cut losers faster
         if hours > 24 and current_profit < -0.005:
             return "exit_time_24h_loss"
         if hours > 48 and current_profit < 0.005:
             return "exit_time_48h"
 
-        # Trend flip exit
         if not trade.is_short and current_profit > 0.005 and last.get("trend_4h", 0) == -1:
             return "long_exit_trend_flip"
         if trade.is_short and current_profit > 0.005 and last.get("trend_4h", 0) == 1:
             return "short_exit_trend_flip"
 
-        # OBV reversal exit: volume momentum shifts against position
+        # OBV reversal exit
         obv_fast_col = f"obv_ema_{self.obv_fast.value}"
         obv_slow_col = f"obv_ema_{self.obv_slow.value}"
         obv_fast = last.get(obv_fast_col, 0)
@@ -230,7 +239,6 @@ class OBVPulseRisk(IStrategy):
             if trade.is_short and obv_fast > obv_slow:
                 return "short_exit_obv_reversal"
 
-        # Momentum fade exit (MACD)
         if current_profit > 0.02:
             if not trade.is_short and last.get("macd_hist", 0) < 0:
                 return "long_exit_momentum_fade"
@@ -241,25 +249,13 @@ class OBVPulseRisk(IStrategy):
 
     def custom_stake_amount(self, pair, current_time, current_rate, proposed_stake,
                             min_stake, max_stake, leverage, entry_tag, side, **kwargs):
-        """
-        ATR risk-based position sizing with drawdown protection.
-        1. Track high water mark → detect drawdown
-        2. Risk = 1.2% normal, 0.6% in drawdown (wallet < 90% of HWM)
-        3. Effective stop = max(fixed_stoploss, 2×ATR/price × leverage)
-        4. Stake = risk_budget / effective_stop
-        """
         wallet = self.wallets.get_total_stake_amount()
-
-        # Update high water mark
         if wallet > self._hwm:
             self._hwm = wallet
-
-        # Drawdown-aware risk level
         drawdown_pct = 1.0 - (wallet / self._hwm) if self._hwm > 0 else 0.0
         risk_pct = self.risk_drawdown if drawdown_pct > self.dd_threshold else self.risk_normal
         risk_amount = wallet * risk_pct
 
-        # Get ATR for dynamic stop distance
         effective_stop = abs(self.stoploss)
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) > 0:
@@ -268,17 +264,12 @@ class OBVPulseRisk(IStrategy):
                 atr_stop = (self.atr_stop_mult * atr / current_rate) * leverage
                 effective_stop = max(effective_stop, atr_stop)
 
-        # Position size from risk budget
         stake = risk_amount / effective_stop if effective_stop > 0 else proposed_stake
-
-        # Cap at max % of wallet and exchange limits
         max_per_trade = wallet * self.max_stake_pct
         stake = min(stake, max_per_trade, max_stake)
         if min_stake is not None:
             stake = max(stake, min_stake)
-
         return stake
 
-    def leverage(self, pair, current_time, current_rate, proposed_leverage,
-                 max_leverage, entry_tag, side, **kwargs):
+    def leverage(self, pair, current_time, current_rate, proposed_leverage, max_leverage, entry_tag, side, **kwargs):
         return 2.0
