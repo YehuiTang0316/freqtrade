@@ -33,6 +33,11 @@
       "name": "obvpulse",
       "strategy": "OBVPulse",
       "host_port": 18085
+    },
+    {
+      "name": "obvpulserisk",
+      "strategy": "OBVPulseRisk",
+      "host_port": 18086
     }
   ]
 }
